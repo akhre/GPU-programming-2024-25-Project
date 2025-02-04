@@ -205,9 +205,9 @@ class OriginalFrame(VideoFrame.VideoFrame):
 
 
 class Filter1Frame(VideoFrame.VideoFrame):
-    def apply_filter(self, frame):
+    def apply_filter(self, frame, d_frame):
         # Allocate memory on the GPU
-        d_frame = cuda.to_device(np.ascontiguousarray(frame))
+        # d_frame = cuda.to_device(np.ascontiguousarray(frame))
         # d_frame = cuda.to_device(frame)
         d_output = cuda.device_array_like(frame)
 
@@ -257,9 +257,9 @@ class Filter1Frame(VideoFrame.VideoFrame):
 
 
 class Filter2Frame(VideoFrame.VideoFrame):
-    def apply_filter(self, frame):
+    def apply_filter(self, frame, d_frame):
         # Allocate memory on the GPU
-        d_frame = cuda.to_device(np.ascontiguousarray(frame))
+        # d_frame = cuda.to_device(np.ascontiguousarray(frame))
         # d_frame = cuda.to_device(frame)
         d_output = cuda.device_array_like(frame)
 
@@ -280,13 +280,13 @@ class Filter2Frame(VideoFrame.VideoFrame):
 
 class Filter3Frame(VideoFrame.VideoFrame):
 
-    def apply_filter(self, frame):
+    def apply_filter(self, frame, d_frame):
         # Scale factor for the bicubic interpolation
         scale = 2.0
         # scale = 0.5
 
         # Allocate memory on the GPU
-        d_frame = cuda.to_device(np.ascontiguousarray(frame))
+        # d_frame = cuda.to_device(np.ascontiguousarray(frame))
         # d_frame = cuda.to_device(frame)
         d_output = cuda.device_array_like(frame)
 
@@ -306,7 +306,7 @@ class Filter3Frame(VideoFrame.VideoFrame):
 
 class Filter4Frame(VideoFrame.VideoFrame):
 
-    def apply_filter(self, frame):
+    def apply_filter(self, frame, d_frame):
         # Apply the bilateral filter
         filtered_frame = process_frame_gpu_filtro_4(frame, 15, 30)  # sigma_s = 15.0, sigma_r = 0.1
         # filtered_frame = frame
