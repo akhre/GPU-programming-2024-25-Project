@@ -1,0 +1,7 @@
+/.vscode
+__pycache__/
+NotUsed/
+workspace/
+env/
+**/*.log
+videos/
