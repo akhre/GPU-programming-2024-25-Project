@@ -6,8 +6,7 @@ import numpy as np
 from numba import cuda
 import VideoFrame
 from Filters.BicubicInterpolation import bicubic_interpolation
-# from Filters.BilateralFiltering_v2 import bilateral_filter_x_channel  # There is a problem with the shared memorry, the computation happens (as expected) only on a little tile, but this cause glitches on the output
-from Filters.BilateralFiltering import bilateral_filter_x_channel
+from Filters.BilateralFiltering import bilateral_filter
 from Filters.GaussianBlur import compute_gaussian_kernel
 import math
 import logging
@@ -49,21 +48,25 @@ def process_frame_gpu_filtro_2(frame, output):
     height = frame.shape[1]
 
     if (x < frame.shape[0] and y < frame.shape[1]):  # Check if the thread is within the bounds of the frame
-        # Define the 13x13 Gaussian kernel
-        kernel_size = 13
+        max_kernel_size = 21    # Define the maximum possible size for the Gaussian kernel in order to allocate the shared memory.
         sigma = 2.0
-        kernel = cuda.shared.array(shape=(kernel_size, kernel_size), dtype=np.float32)  # The shared memory is used to store the kernel
+        kernel_size = 2 * int(4 * sigma + 0.5) + 1
+        if kernel_size > max_kernel_size:
+            raise ValueError("Kernel size is too large")
+        
+        kernel = cuda.shared.array(shape=(max_kernel_size, max_kernel_size), dtype=np.float32)  # The shared memory is used to store the kernel
         compute_gaussian_kernel(kernel, kernel_size, sigma)
+        m = kernel_size // 2
+        n = kernel_size // 2
 
         # Apply the Gaussian blur to each color channel
         for c in range(3):
             sum = 0.0
-            for i in range(-6, 7):
-                for j in range(-6, 7):
+            for i in range(-m, m+1):
+                for j in range(-n, n+1):
                     xi = min(max(x + i, 0), width - 1)
                     yj = min(max(y + j, 0), height - 1)
-                    sum += kernel[i + 6, j + 6] * frame[xi, yj, c]
-
+                    sum += frame[xi, yj, c] * kernel[m + i, n + j]
             output[x, y, c] = sum
 
 
@@ -111,35 +114,23 @@ def process_frame_gpu_filtro_4(frame, sigma_s, sigma_r):
     result_device = cuda.device_array((frame.shape[0], frame.shape[1], 3), dtype=np.float32)
 
 
-    # Define the grid and block dimensions
-    # threads_per_block = (16, 16)
-    blockSize = 16
-    threads_per_block = (blockSize, blockSize)
-    # Per coprire l'intera immagine con dei threads dobbiamo prendere la dimensione del frame e dividerla per il numero di thread in ciascun blocco.
-    blocks_per_grid_x = math.ceil(frame_shape[0] / threads_per_block[0])    
-    blocks_per_grid_y = math.ceil(frame_shape[1] / threads_per_block[1])
-    
+    # Define the block and grid dimensions
+    threads_per_block = (16, 16)
+    blocks_per_grid_x = math.ceil(frame.shape[0] / threads_per_block[0])
+    blocks_per_grid_y = math.ceil(frame.shape[1] / threads_per_block[1])
     blocks_per_grid = (blocks_per_grid_x, blocks_per_grid_y)
-    
-    # Launch the kernel for each channel
-    bilateral_filter_x_channel[blocks_per_grid, threads_per_block, stream1](frame_r_device, result_r_device, sigma_s, sigma_r)
-    bilateral_filter_x_channel[blocks_per_grid, threads_per_block, stream2](frame_g_device, result_g_device, sigma_s, sigma_r)
-    bilateral_filter_x_channel[blocks_per_grid, threads_per_block, stream3](frame_b_device, result_b_device, sigma_s, sigma_r)
-    
-    # Synchronize the streams 
-    # stream1.synchronize()
-    # stream2.synchronize()
-    # stream3.synchronize()
-    cuda.synchronize()
-    
-    # Combine the channels back into an image on the GPU
-    combine_channels[blocks_per_grid, threads_per_block](result_r_device, result_g_device, result_b_device, result_device)
+
+    # Define sigma values
+    sigma_s = 10.0
+    sigma_r = 0.5
+    # Launch the kernel
+    bilateral_filter[blocks_per_grid, threads_per_block](frame, result_device, sigma_s, sigma_r)
 
     # Copy the final result back to the host
     result = result_device.copy_to_host()
     
     # Convert the result to uint8
-    result = np.clip(result, 0, 255).astype(np.uint8)   # Clip may be not necessary
+    result = result.astype(np.uint8)   # Clip may be not necessary
     return result
 
 
