@@ -79,40 +79,7 @@ def process_frame_gpu_filtro_3(frame, output):
 
 def process_frame_gpu_filtro_4(frame, sigma_s, sigma_r):
     # Bilateral filtering
-    # Split the frame into RGB channels
-    frame_r = np.ascontiguousarray(frame[:, :, 0])
-    frame_g = np.ascontiguousarray(frame[:, :, 1])
-    frame_b = np.ascontiguousarray(frame[:, :, 2])
-    
-    # Allocate pinned (page-locked) arrays for faster transfer
-    frame_r_pinned = cuda.pinned_array(frame_r.shape, dtype=frame_r.dtype)
-    frame_g_pinned = cuda.pinned_array(frame_g.shape, dtype=frame_g.dtype)
-    frame_b_pinned = cuda.pinned_array(frame_b.shape, dtype=frame_b.dtype)
-    
-    # Copy the host data into pinned arrays
-    frame_r_pinned[:] = frame_r[:]
-    frame_g_pinned[:] = frame_g[:]
-    frame_b_pinned[:] = frame_b[:]
-    
-    
-    # Create CUDA streams
-    stream1 = cuda.stream()
-    stream2 = cuda.stream()
-    stream3 = cuda.stream()
-    
-    # Transfer pinned data to device asynchronously using separate streams
-    frame_r_device = cuda.to_device(frame_r_pinned, stream=stream1)
-    frame_g_device = cuda.to_device(frame_g_pinned, stream=stream2)
-    frame_b_device = cuda.to_device(frame_b_pinned, stream=stream3)
-    
-    
-    frame_shape = (frame.shape[0], frame.shape[1])
-    # Allocate memory for result on the device
-    result_r_device = cuda.device_array(frame_shape, dtype=np.float32, stream=stream1)
-    result_g_device = cuda.device_array(frame_shape, dtype=np.float32, stream=stream2)
-    result_b_device = cuda.device_array(frame_shape, dtype=np.float32, stream=stream3)
     result_device = cuda.device_array((frame.shape[0], frame.shape[1], 3), dtype=np.float32)
-
 
     # Define the block and grid dimensions
     threads_per_block = (16, 16)
@@ -132,20 +99,6 @@ def process_frame_gpu_filtro_4(frame, sigma_s, sigma_r):
     # Convert the result to uint8
     result = result.astype(np.uint8)   # Clip may be not necessary
     return result
-
-
-
-@cuda.jit
-def combine_channels(result_r, result_g, result_b, result):
-    x, y = cuda.grid(2)
-    if x < result.shape[0] and y < result.shape[1]:
-        result[x, y, 0] = result_r[x, y]
-        result[x, y, 1] = result_g[x, y]
-        result[x, y, 2] = result_b[x, y]
-
-
-
-
 
 def measure_distortion(original_frame, filtered_frame):
     # Convert frames to grayscale
@@ -249,9 +202,8 @@ class Filter1Frame(VideoFrame.VideoFrame):
 
 class Filter2Frame(VideoFrame.VideoFrame):
     def apply_filter(self, frame, d_frame):
+        
         # Allocate memory on the GPU
-        # d_frame = cuda.to_device(np.ascontiguousarray(frame))
-        # d_frame = cuda.to_device(frame)
         d_output = cuda.device_array_like(frame)
 
         # Define the grid and block dimensions
@@ -261,7 +213,6 @@ class Filter2Frame(VideoFrame.VideoFrame):
         blocks_per_grid_y = int(np.ceil((frame.shape[1] + threads_per_block[1] - 1) / threads_per_block[1]))
         blocks_per_grid = (blocks_per_grid_x, blocks_per_grid_y)
         process_frame_gpu_filtro_2[blocks_per_grid, threads_per_block](d_frame, d_output)
-        # bilateral_filter[blocks_per_grid, threads_per_block](d_frame, d_output, 15.0, 0.1)  # sigma_s = 15.0, sigma_r = 0.1
         filtered_frame = d_output.copy_to_host()
         mse, psnr = measure_distortion(frame, filtered_frame)
         print(f"Filter 2 - MSE: {mse}, PSNR: {psnr}")
@@ -277,8 +228,6 @@ class Filter3Frame(VideoFrame.VideoFrame):
         # scale = 0.5
 
         # Allocate memory on the GPU
-        # d_frame = cuda.to_device(np.ascontiguousarray(frame))
-        # d_frame = cuda.to_device(frame)
         d_output = cuda.device_array_like(frame)
 
         # Define the grid and block dimensions
@@ -300,7 +249,7 @@ class Filter4Frame(VideoFrame.VideoFrame):
     def apply_filter(self, frame, d_frame):
         # Apply the bilateral filter
         filtered_frame = process_frame_gpu_filtro_4(frame, 15, 30)  # sigma_s = 15.0, sigma_r = 0.1
-        # filtered_frame = frame
+
         # Measure distortion
         mse, psnr = measure_distortion(frame, filtered_frame)
         print(f"Filter 4 - MSE: {mse}, PSNR: {psnr}")
