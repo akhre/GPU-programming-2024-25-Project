@@ -11,6 +11,9 @@ class VideoFrame:
         self.canvas = Canvas(self.parent, width=800, height=600)  # Set the canvas size
         self.canvas.pack()
         
+    def update_canvas_size(self, frame):
+        self.canvas.config(width=frame.shape[1], height=frame.shape[0])
+        
     
     def update(self, frame):
         d_frame = cuda.to_device(np.ascontiguousarray(frame))
