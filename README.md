@@ -6,7 +6,7 @@ s313169
 main.py is used to run the program with the GUI.
 main_profiler.py does not have a GUI and it is used only with the profiler with the following command:
 ```
-sudo /usr/local/cuda/bin/nvprof --openacc-profiling off --export-profile /home/diego/Project/profile.nvvp /home/diego/Project/main_profiler.py
+sudo /usr/local/cuda/bin/nvprof -f --openacc-profiling off --export-profile /home/diego/GPU-programming-2024-25-Project/profile.nvvp /home/diego/GPU-programming-2024-25-Project/main_profiler.py /home/diego/GPU-programming-2024-25-Project/videos/KoNViD_1k_videos/2999049224.mp4
 ```
 
 The profiler needs java 8 and must be run as:
