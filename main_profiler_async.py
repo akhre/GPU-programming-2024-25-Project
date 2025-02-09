@@ -4,7 +4,7 @@ import sys
 import cv2
 import numpy as np
 from numba import cuda
-import VideoFrame
+import VideoFrameAsync as VideoFrame
 from Filters.BicubicInterpolation import bicubic_interpolation
 from Filters.BilateralFiltering import bilateral_filter
 from Filters.GaussianBlur import gaussian_filter
@@ -74,7 +74,7 @@ class OriginalFrame(VideoFrame.VideoFrame):
         super().__init__(None)  # Call the parent class constructor without a parent
         self.screens = []
         self.vid = None
-    
+
     def update(self):
         ret, frame = self.vid.read()
         if ret:
@@ -95,7 +95,7 @@ class OriginalFrame(VideoFrame.VideoFrame):
 
 
 class Filter1Frame(VideoFrame.VideoFrame):
-    def apply_filter(self, frame, d_frame):
+    async def apply_filter(self, frame, d_frame):
         """
         Filter: Laplacian Filter
         """
@@ -151,7 +151,7 @@ class Filter1Frame(VideoFrame.VideoFrame):
 
 
 class Filter2Frame(VideoFrame.VideoFrame):
-    def apply_filter(self, frame, d_frame):
+    async def apply_filter(self, frame, d_frame):
         """
         Filter: Gaussian Blur
         """
@@ -191,7 +191,7 @@ class Filter2Frame(VideoFrame.VideoFrame):
 
 class Filter3Frame(VideoFrame.VideoFrame):
 
-    def apply_filter(self, frame, d_frame):
+    async def apply_filter(self, frame, d_frame):
         # Scale factor for the bicubic interpolation
         scale = 2.0
         # scale = 0.5
@@ -244,7 +244,7 @@ class Filter3Frame(VideoFrame.VideoFrame):
 
 class Filter4Frame(VideoFrame.VideoFrame):
 
-    def apply_filter(self, frame, d_frame):
+    async def apply_filter(self, frame, d_frame):
         # Bilateral filtering
         result_device = cuda.device_array((frame.shape[0], frame.shape[1], 3), dtype=np.float32)
 

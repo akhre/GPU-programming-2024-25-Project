@@ -1,6 +1,6 @@
-#!/usr/bin/python3
-
-import sys
+from tkinter import *
+from tkinter.filedialog import askopenfilename
+from PIL import Image as Pil_image, ImageTk as Pil_imageTk
 import cv2
 import numpy as np
 from numba import cuda
@@ -18,14 +18,6 @@ RESULTS_DIR = "results/gpu" # Directory to store the results
 if not os.path.exists(RESULTS_DIR):
     os.makedirs(RESULTS_DIR)    # Create the results directory if it does not exist
 
-# VIDEO_PATH = "/media/diego/Volume/Polito/Magistrale/GPU programming/Lab/Project/videos/videoplayback.mp4"
-# VIDEO_PATH = "/media/diego/Volume/Polito/Magistrale/GPU programming/Lab/Project/videos/KoNViD_1k_videos/12099271596.mp4"
-VIDEO_PATH = ''
-if len(sys.argv) > 1:
-    VIDEO_PATH = sys.argv[1]
-else:
-    print("Usage: python main_profiler.py <video_path>")
-    sys.exit(1)
 
 # Configure logging for each filter
 logging.basicConfig(level=logging.INFO)
@@ -34,16 +26,8 @@ filter2_logger = logging.getLogger("Filter2")
 filter3_logger = logging.getLogger("Filter3")
 filter4_logger = logging.getLogger("Filter4")
 
-
-filter1_handler = logging.FileHandler(f"{RESULTS_DIR}/{os.path.splitext(os.path.basename(VIDEO_PATH))[0]}_filter_laplacian.log", "w")
-filter2_handler = logging.FileHandler(f"{RESULTS_DIR}/{os.path.splitext(os.path.basename(VIDEO_PATH))[0]}_filter_gaussian_blur.log", "w")
-filter3_handler = logging.FileHandler(f"{RESULTS_DIR}/{os.path.splitext(os.path.basename(VIDEO_PATH))[0]}_filter_bicubic_interpolation.log", "w")
-filter4_handler = logging.FileHandler(f"{RESULTS_DIR}/{os.path.splitext(os.path.basename(VIDEO_PATH))[0]}_filter_bilateral.log", "w")
-
-filter1_logger.addHandler(filter1_handler)
-filter2_logger.addHandler(filter2_handler)
-filter3_logger.addHandler(filter3_handler)
-filter4_logger.addHandler(filter4_handler)
+def get_video_name(video_path):
+    return os.path.splitext(os.path.basename(video_path))[0]
 
 
 def measure_distortion(original_frame, filtered_frame):
@@ -70,24 +54,40 @@ def measure_distortion(original_frame, filtered_frame):
 
 
 class OriginalFrame(VideoFrame.VideoFrame):
-    def __init__(self):
-        super().__init__(None)  # Call the parent class constructor without a parent
+    def __init__(self, parent):
+        super().__init__(parent)  # Call the parent class constructor
         self.screens = []
         self.vid = None
-    
+
     def update(self):
         ret, frame = self.vid.read()
         if ret:
+            self.photo = Pil_imageTk.PhotoImage(
+                image=Pil_image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            )
+            # Position the image in the center with padding
+            x = (self.canvas.winfo_width() - self.photo.width()) / 2
+            y = (self.canvas.winfo_height() - self.photo.height()) / 2
+            self.canvas.create_image(x, y, image=self.photo, anchor=NW)
             for screen in self.screens:
                 screen.update(frame)
         else:
+            self.reset_frame()  # Reset the frame when the video ends
             self.vid.release()
-            return False  # Indicate that the video has ended
-        return True  # Indicate that the video is still playing
-    
+            return
+
+        self.parent.after(10, self.update)
+
     def load_video(self, video):
         self.vid = cv2.VideoCapture(video)  # Open the video file
         self.update()
+    
+    def reset_frame(self):
+        # Set a blank frame or a specific image to indicate the end of the video
+        blank_frame = np.zeros((self.canvas.winfo_height(), self.canvas.winfo_width(), 3), dtype=np.uint8)
+        self.photo = Pil_imageTk.PhotoImage(image=Pil_image.fromarray(blank_frame))
+        self.canvas.create_image(0, 0, image=self.photo, anchor=NW)
+
 
     def __del__(self):
         if self.vid.isOpened():
@@ -289,26 +289,90 @@ class Filter4Frame(VideoFrame.VideoFrame):
         filter4_logger.info(f"Timestamp: {datetime.now()}, EXECUTION TIME ms: {elapsed_time_ms}")
 
         return filtered_frame
-    
-        
-def main():
-    camera_frame = OriginalFrame()
-    filter_1_frame = Filter1Frame(None)
-    filter_2_frame = Filter2Frame(None)
-    filter_3_frame = Filter3Frame(None)
-    filter_4_frame = Filter4Frame(None)
 
-    camera_frame.screens.append(filter_1_frame)
-    camera_frame.screens.append(filter_2_frame)
-    camera_frame.screens.append(filter_3_frame)
-    camera_frame.screens.append(filter_4_frame)
+def button1_click(frame):
+    video_source = askopenfilename(initialdir="./videos/KoNViD_1k_videos", title="Select a video file")
+    if video_source:
+        video_name = get_video_name(video_source)
+        frame.load_video(video_source)
+        logging.basicConfig(level=logging.INFO)
 
-    camera_frame.load_video(VIDEO_PATH)
+        filter1_handler = logging.FileHandler(f"{RESULTS_DIR}/{video_name}_filter_laplacian.log", "w")
+        filter2_handler = logging.FileHandler(f"{RESULTS_DIR}/{video_name}_filter_gaussian_blur.log", "w")
+        filter3_handler = logging.FileHandler(f"{RESULTS_DIR}/{video_name}_filter_bicubic_interpolation.log", "w")
+        filter4_handler = logging.FileHandler(f"{RESULTS_DIR}/{video_name}_filter_bilateral.log", "w")
 
-    while camera_frame.update():
-        pass  # Continue updating until the video ends
+        filter1_logger.addHandler(filter1_handler)
+        filter2_logger.addHandler(filter2_handler)
+        filter3_logger.addHandler(filter3_handler)
+        filter4_logger.addHandler(filter4_handler)
 
-    return 0
 
-if __name__ == "__main__":
-    sys.exit(main())
+
+# Create the main window
+root = Tk()
+root.title("GPU Video Filters")
+# root.geometry('1200x800')
+root.geometry("3840x2160")  # Set the window size to 4K
+root.configure(background="#F8F8F8")
+
+
+text_label = Label(root, text="Video Filters", fg="black", bg="#F8F8F8")
+text_label.pack(pady=(10, 10))
+text_label.config(font=("Vandana", 25))
+
+left_side = Frame(root, bg="#F8F8F8")
+left_side.pack(side=LEFT, padx=20, pady=20)
+left_side_top = Frame(left_side, bg="#F8F8F8")
+left_side_top.pack(side=TOP, padx=20, pady=20)
+left_side_bottom = Frame(left_side, bg="#F8F8F8")
+left_side_bottom.pack(side=BOTTOM, padx=20, pady=20)
+Label(left_side_bottom, text="Original Video", bg="#F8F8F8").pack()
+
+right_side = Frame(root, bg="#F8F8F8")
+right_side.pack(side=RIGHT, padx=20, pady=20)
+
+right_top_left_frame = Frame(right_side, bg="#F8F8F8")
+right_top_left_frame.grid(row=0, column=0, padx=10, pady=10)
+Label(right_top_left_frame, text="Laplacian Filter", bg="#F8F8F8").pack()
+
+right_top_right_frame = Frame(right_side, bg="#F8F8F8")
+right_top_right_frame.grid(row=0, column=1, padx=10, pady=10)
+Label(right_top_right_frame, text="Gaussian Blur", bg="#F8F8F8").pack()
+
+right_bottom_left_frame = Frame(right_side, bg="#F8F8F8")
+right_bottom_left_frame.grid(row=1, column=0, padx=10, pady=10)
+Label(right_bottom_left_frame, text="Bicubic Interpolation", bg="#F8F8F8").pack()
+
+right_bottom_right_frame = Frame(right_side, bg="#F8F8F8")
+right_bottom_right_frame.grid(row=1, column=1, padx=10, pady=10)
+Label(right_bottom_right_frame, text="Bilateral Filter", bg="#F8F8F8").pack()
+
+
+# Add button for open file dialog
+button1 = Button(
+    left_side_top,
+    text="Load video",
+    command=lambda: button1_click(camera_frame),
+    bg="red",
+    width=15,
+    height=3,
+)
+button1.pack(side=LEFT, padx=10, pady=10)
+
+# Add live camera feed to the left side of the GUI
+camera_frame = OriginalFrame(left_side_bottom)
+
+filter_1_frame = Filter1Frame(right_top_left_frame)
+filter_2_frame = Filter2Frame(right_top_right_frame)
+filter_3_frame = Filter3Frame(right_bottom_left_frame)
+filter_4_frame = Filter4Frame(right_bottom_right_frame)
+
+camera_frame.screens.append(filter_1_frame)
+camera_frame.screens.append(filter_2_frame)
+camera_frame.screens.append(filter_3_frame)
+camera_frame.screens.append(filter_4_frame)
+# camera_frame.update()
+
+
+root.mainloop()

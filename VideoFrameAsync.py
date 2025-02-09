@@ -1,6 +1,9 @@
+import asyncio
 from tkinter import *
 from PIL import Image as Pil_image, ImageTk as Pil_imageTk
 import cv2
+from numba import cuda
+import numpy as np
 
 
 class VideoFrame:
@@ -14,8 +17,9 @@ class VideoFrame:
         
     
     def update(self, frame):
+        d_frame = cuda.to_device(np.ascontiguousarray(frame))
         # Apply selected filter to the frame
-        frame = self.apply_filter(frame)
+        frame = asyncio.run(self.apply_filter(frame, d_frame))
         self.photo = Pil_imageTk.PhotoImage(image=Pil_image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
         # Position the image in the center with padding
         x = (self.canvas.winfo_width() - self.photo.width()) / 2

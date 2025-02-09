@@ -4,7 +4,7 @@ import sys
 import cv2
 import numpy as np
 from numba import cuda
-import VideoFrame
+import VideoFrameOptimized as VideoFrame
 from Filters.BicubicInterpolation import bicubic_interpolation
 from Filters.BilateralFiltering import bilateral_filter
 from Filters.GaussianBlur import gaussian_filter
@@ -74,10 +74,11 @@ class OriginalFrame(VideoFrame.VideoFrame):
         super().__init__(None)  # Call the parent class constructor without a parent
         self.screens = []
         self.vid = None
-    
+
     def update(self):
         ret, frame = self.vid.read()
         if ret:
+            self.apply_filters(frame)
             for screen in self.screens:
                 screen.update(frame)
         else:
@@ -88,6 +89,38 @@ class OriginalFrame(VideoFrame.VideoFrame):
     def load_video(self, video):
         self.vid = cv2.VideoCapture(video)  # Open the video file
         self.update()
+    def apply_filters(self, frame):
+        # Create the CUDA streams to execute the filters in parallel
+        stream_copy = cuda.stream()
+        stream_filter_1 = cuda.stream()
+        stream_filter_2 = cuda.stream()
+        stream_filter_3 = cuda.stream()
+        stream_filter_4 = cuda.stream()
+        
+        # Copy the data to the GPU (with the streams so asynchronous copies can be performed)
+        d_frame = cuda.to_device(frame, stream_copy)
+        
+        # Apply the filters:
+        filtered_frame1 = filter_1_frame.apply_filter(frame, d_frame, stream_filter_1)
+        filtered_frame2 = filter_2_frame.apply_filter(frame, d_frame, stream_filter_2)
+        filtered_frame3 = filter_3_frame.apply_filter(frame, d_frame, stream_filter_3)
+        filtered_frame4 = filter_4_frame.apply_filter(frame, d_frame, stream_filter_4)
+        
+        stream_copy.synchronize()
+
+        # Update the frames
+        # stream_filter_1.synchronize()
+        filter_1_frame.update(filtered_frame1)
+        
+        # stream_filter_2.synchronize()
+        filter_2_frame.update(filtered_frame2)
+        
+        # stream_filter_3.synchronize()
+        filter_3_frame.update(filtered_frame3)
+        
+        # stream_filter_4.synchronize()
+        filter_4_frame.update(filtered_frame4)
+        
 
     def __del__(self):
         if self.vid.isOpened():
@@ -95,7 +128,7 @@ class OriginalFrame(VideoFrame.VideoFrame):
 
 
 class Filter1Frame(VideoFrame.VideoFrame):
-    def apply_filter(self, frame, d_frame):
+    def apply_filter(self, frame, d_frame, stream):
         """
         Filter: Laplacian Filter
         """
@@ -127,11 +160,11 @@ class Filter1Frame(VideoFrame.VideoFrame):
         start_event.record()
 
         # Launch the kernel
-        laplacianFilter[blocks_per_grid, threads_per_block](
+        laplacianFilter[blocks_per_grid, threads_per_block, stream](
             d_frame_gray, d_output, frame.shape[0], frame.shape[1]
         )
         
-        cuda.synchronize()  # Wait for all threads to complete
+        # cuda.synchronize()  # Wait for all threads to complete
         # Record the end event
         end_event.record()
 
@@ -142,7 +175,7 @@ class Filter1Frame(VideoFrame.VideoFrame):
         elapsed_time_ms = cuda.event_elapsed_time(start_event, end_event)
 
         # Copy the result back to the host
-        filtered_frame = d_output.copy_to_host()
+        filtered_frame = d_output.copy_to_host(stream=stream)
 
         # Log the results
         filter1_logger.info(f"Timestamp: {datetime.now()}, EXECUTION TIME ms: {elapsed_time_ms}")
@@ -151,7 +184,7 @@ class Filter1Frame(VideoFrame.VideoFrame):
 
 
 class Filter2Frame(VideoFrame.VideoFrame):
-    def apply_filter(self, frame, d_frame):
+    def apply_filter(self, frame, d_frame, stream):
         """
         Filter: Gaussian Blur
         """
@@ -172,8 +205,8 @@ class Filter2Frame(VideoFrame.VideoFrame):
         start_event.record()
 
         # Launch the kernel
-        gaussian_filter[blocks_per_grid, threads_per_block](d_frame, d_output)
-        cuda.synchronize()  # wait for all threads to complete. The copy to the host performs an implicit synchronization, so the call to cuda.syncronize is not really necessary.
+        gaussian_filter[blocks_per_grid, threads_per_block, stream](d_frame, d_output)
+        # cuda.synchronize()  # wait for all threads to complete. The copy to the host performs an implicit synchronization, so the call to cuda.syncronize is not really necessary.
         
         # Record the end event
         end_event.record()
@@ -184,14 +217,14 @@ class Filter2Frame(VideoFrame.VideoFrame):
         # Calculate the elapsed time in milliseconds
         elapsed_time_ms = cuda.event_elapsed_time(start_event, end_event)
         
-        filtered_frame = d_output.copy_to_host()
+        filtered_frame = d_output.copy_to_host(stream=stream)
         filter2_logger.info(f"Timestamp: {datetime.now()}, EXECUTION TIME ms: {elapsed_time_ms}")
         return filtered_frame
 
 
 class Filter3Frame(VideoFrame.VideoFrame):
 
-    def apply_filter(self, frame, d_frame):
+    def apply_filter(self, frame, d_frame, stream):
         # Scale factor for the bicubic interpolation
         scale = 2.0
         # scale = 0.5
@@ -219,9 +252,9 @@ class Filter3Frame(VideoFrame.VideoFrame):
         start_event.record()
 
         # Launch the kernel
-        bicubic_interpolation[blocks_per_grid, threads_per_block](d_frame, d_output, scale)
+        bicubic_interpolation[blocks_per_grid, threads_per_block, stream](d_frame, d_output, scale)
         
-        cuda.synchronize()  # wait for all threads to complete. The copy to the host performs an implicit synchronization, so the call to cuda.syncronize is not really necessary.
+        # cuda.synchronize()  # wait for all threads to complete. The copy to the host performs an implicit synchronization, so the call to cuda.syncronize is not really necessary.
         
         # Record the end event
         end_event.record()
@@ -232,7 +265,7 @@ class Filter3Frame(VideoFrame.VideoFrame):
         # Calculate the elapsed time in milliseconds
         elapsed_time_ms = cuda.event_elapsed_time(start_event, end_event)
         
-        filtered_frame = d_output.copy_to_host()
+        filtered_frame = d_output.copy_to_host(stream=stream)
         mse, psnr = measure_distortion(frame, filtered_frame)
         
         filter3_logger.info(f"Timestamp: {datetime.now()}, EXECUTION TIME ms: {elapsed_time_ms}, MSE: {mse}, PSNR: {psnr}")
@@ -244,7 +277,7 @@ class Filter3Frame(VideoFrame.VideoFrame):
 
 class Filter4Frame(VideoFrame.VideoFrame):
 
-    def apply_filter(self, frame, d_frame):
+    def apply_filter(self, frame, d_frame, stream):
         # Bilateral filtering
         result_device = cuda.device_array((frame.shape[0], frame.shape[1], 3), dtype=np.float32)
 
@@ -266,9 +299,9 @@ class Filter4Frame(VideoFrame.VideoFrame):
         start_event.record()
         
         # Launch the kernel
-        bilateral_filter[blocks_per_grid, threads_per_block](frame, result_device, sigma_s, sigma_r)
+        bilateral_filter[blocks_per_grid, threads_per_block, stream](frame, result_device, sigma_s, sigma_r)
                 
-        cuda.synchronize()  # wait for all threads to complete. The copy to the host performs an implicit synchronization, so the call to cuda.syncronize is not really necessary.
+        # cuda.synchronize()  # wait for all threads to complete. The copy to the host performs an implicit synchronization, so the call to cuda.syncronize is not really necessary.
         
         # Record the end event
         end_event.record()
@@ -280,7 +313,7 @@ class Filter4Frame(VideoFrame.VideoFrame):
         elapsed_time_ms = cuda.event_elapsed_time(start_event, end_event)
 
         # Copy the final result back to the host
-        result = result_device.copy_to_host()
+        result = result_device.copy_to_host(stream=stream)
         
         # Convert the result to uint8
         filtered_frame = result.astype(np.uint8)   # Clip may be not necessary
@@ -290,13 +323,15 @@ class Filter4Frame(VideoFrame.VideoFrame):
 
         return filtered_frame
     
+    
+camera_frame = OriginalFrame()
+filter_1_frame = Filter1Frame(None)
+filter_2_frame = Filter2Frame(None)
+filter_3_frame = Filter3Frame(None)
+filter_4_frame = Filter4Frame(None)
         
 def main():
-    camera_frame = OriginalFrame()
-    filter_1_frame = Filter1Frame(None)
-    filter_2_frame = Filter2Frame(None)
-    filter_3_frame = Filter3Frame(None)
-    filter_4_frame = Filter4Frame(None)
+
 
     camera_frame.screens.append(filter_1_frame)
     camera_frame.screens.append(filter_2_frame)
