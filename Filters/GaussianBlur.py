@@ -3,44 +3,39 @@ import math
 from numba import cuda
 
 @cuda.jit
-def compute_gaussian_kernel(kernel, kernel_size, sigma):
-    sum_val = 0.0
-    for i in range(kernel_size):
-        for j in range(kernel_size):
-            x_dist = i - (kernel_size // 2)
-            y_dist = j - (kernel_size // 2)
-            kernel[i, j] = (1 / (2 * np.pi * sigma**2)) * math.exp(-(x_dist**2 + y_dist**2) / (2 * sigma**2))
-            sum_val += kernel[i, j]
-    
-    # Normalize the kernel
-    for i in range(kernel_size):
-        for j in range(kernel_size):
-            kernel[i, j] /= sum_val
-            
-            
+def compute_gaussian_kernel(d_kernel, sigma):
+    x, y = cuda.grid(2)
+    if x >= d_kernel.shape[0] or y >= d_kernel.shape[1]:
+        return
+    center_x = d_kernel.shape[0] // 2
+    center_y = d_kernel.shape[1] // 2
+    dx = x - center_x
+    dy = y - center_y
+    scale = 1.0 / (2 * math.pi * sigma ** 2)
+    exponent = -(dx**2 + dy**2) / (2 * sigma ** 2)
+    d_kernel[x, y] = scale * math.exp(exponent)
+
 @cuda.jit
-def gaussian_filter(frame, output):
-    # Gaussian blur
-    x, y = cuda.grid(2)  # Returns the 2D grid indices (x, y) of the current thread
+def convolution(oldimage, kernel, output):
+    i, j = cuda.grid(2)
+    if i >= output.shape[0] or j >= output.shape[1]:
+        # Return if the thread is out of bounds
+        return
 
-    width = frame.shape[0]
-    height = frame.shape[1]
+    kh = kernel.shape[0]
+    kw = kernel.shape[1]
+    h_radius = kh // 2
+    w_radius = kw // 2
 
-    if (x < frame.shape[0] and y < frame.shape[1]):  # Check if the thread is within the bounds of the frame
-        max_kernel_size = 21    # Define the maximum possible size for the Gaussian kernel in order to allocate the shared memory.
-        sigma = 2.0
-        kernel_size = 2 * int(4 * sigma + 0.5) + 1
-        kernel = cuda.shared.array(shape=(max_kernel_size, max_kernel_size), dtype=np.float32)  # The shared memory is used to store the kernel
-        compute_gaussian_kernel(kernel, kernel_size, sigma)
-        m = kernel_size // 2
-        n = kernel_size // 2
-
-        # Apply the Gaussian blur to each color channel
-        for c in range(3):
-            sum = 0.0
-            for i in range(-m, m+1):
-                for j in range(-n, n+1):
-                    xi = min(max(x + i, 0), width - 1)
-                    yj = min(max(y + j, 0), height - 1)
-                    sum += frame[xi, yj, c] * kernel[m + i, n + j]
-            output[x, y, c] = sum
+    
+    # Apply the Gaussian blur to each color channel
+    channels = oldimage.shape[2]
+    for c in range(channels):
+        acc = 0.0
+        for x in range(kh):
+            for y in range(kw):
+                px = i + (x - h_radius)
+                py = j + (y - w_radius)
+                if 0 <= px < oldimage.shape[0] and 0 <= py < oldimage.shape[1]:
+                    acc += oldimage[px, py, c] * kernel[x, y]
+        output[i, j, c] = acc
