@@ -7,7 +7,7 @@ from numba import cuda
 import VideoFrame
 from Filters.BicubicInterpolation import bicubic_interpolation
 from Filters.BilateralFiltering import bilateral_filter
-from Filters.GaussianBlur import gaussian_filter
+from Filters.GaussianBlur import compute_gaussian_kernel, convolution
 from Filters.LaplacianFilter import laplacianFilter
 import math
 import logging
@@ -155,26 +155,45 @@ class Filter2Frame(VideoFrame.VideoFrame):
         """
         Filter: Gaussian Blur
         """
+        
+        # Determine the filter size
+        sigma = 2.0
+        filter_size = 2 * int(4 * sigma + 0.5) + 1
+        kernel = np.zeros((filter_size, filter_size), dtype=np.float32)
+        
         # Allocate memory on the GPU
         d_output = cuda.device_array_like(frame)
-
-        # Define the grid and block dimensions
-        threads_per_block = (16, 16)
-
-        blocks_per_grid_x = int(np.ceil((frame.shape[0] + threads_per_block[0] - 1) / threads_per_block[0]))
-        blocks_per_grid_y = int(np.ceil((frame.shape[1] + threads_per_block[1] - 1) / threads_per_block[1]))
-        blocks_per_grid = (blocks_per_grid_x, blocks_per_grid_y)
+        d_kernel = cuda.to_device(kernel)
         # Create CUDA events for timing
         start_event = cuda.event()
         end_event = cuda.event()
-
+        
+        # Compute Gaussian kernel on the device
+        threads_per_block = (16, 16)
+        blockspergrid_x = (filter_size + threads_per_block[0] - 1) // threads_per_block[0]
+        blockspergrid_y = (filter_size + threads_per_block[1] - 1) // threads_per_block[1]
+        
         # Record the start event
         start_event.record()
-
-        # Launch the kernel
-        gaussian_filter[blocks_per_grid, threads_per_block](d_frame, d_output)
-        cuda.synchronize()  # wait for all threads to complete. The copy to the host performs an implicit synchronization, so the call to cuda.syncronize is not really necessary.
+        compute_gaussian_kernel[(blockspergrid_x, blockspergrid_y), threads_per_block](d_kernel, sigma)
         
+        # Normalize the kernel (copy back to host, sum, normalize, send back)
+        kernel = d_kernel.copy_to_host()
+        kernel_sum = kernel.sum()
+        kernel /= kernel_sum
+        d_kernel = cuda.to_device(kernel)
+        
+
+        
+        # Configure convolution kernel launch parameters
+        # threads_per_block = (16, 16)
+        grid_x = (frame.shape[0] + threads_per_block[0] - 1) // threads_per_block[0]
+        grid_y = (frame.shape[1] + threads_per_block[1] - 1) // threads_per_block[1]
+        blockspergrid = (grid_x, grid_y)
+        # Perform convolution
+        convolution[blockspergrid, threads_per_block](frame, d_kernel, d_output)
+        
+
         # Record the end event
         end_event.record()
 
@@ -368,10 +387,10 @@ filter_2_frame = Filter2Frame(right_top_right_frame)
 filter_3_frame = Filter3Frame(right_bottom_left_frame)
 filter_4_frame = Filter4Frame(right_bottom_right_frame)
 
-camera_frame.screens.append(filter_1_frame)
+# camera_frame.screens.append(filter_1_frame)
 camera_frame.screens.append(filter_2_frame)
-camera_frame.screens.append(filter_3_frame)
-camera_frame.screens.append(filter_4_frame)
+# camera_frame.screens.append(filter_3_frame)
+# camera_frame.screens.append(filter_4_frame)
 # camera_frame.update()
 
 
