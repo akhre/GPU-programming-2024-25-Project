@@ -9,7 +9,7 @@ import math
 import logging
 import time
 import cpu.BicubicInterpolation as BicubicInterpolation
-import cpu.LoG as LoG
+import cpu.GaussianFilter as GaussianFilter
 import os # Used to get the video name
 from datetime import datetime # Used in the logs to timestamp the execution
 
@@ -106,14 +106,13 @@ class Filter1Frame(VideoFrame.VideoFrame):
         start_time = time.time()
         # Convert the frame to grayscale
         # gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        # filtered_frame = LoG.LoG_filter(gray_frame, sigma)
         filtered_frame = laplace(frame)
         filtered_frame = cv2.convertScaleAbs(filtered_frame)
         # self.photo = Pil_imageTk.PhotoImage(image=Pil_image.fromarray(filtered_frame))
         # self.canvas.create_image(0, 0, image=self.photo, anchor=NW)
         
         stop_time = time.time()
-        elapsed_time_ms = (stop_time - start_time) / 1000
+        elapsed_time_ms = (stop_time - start_time) * 1000
     
         # Log the results
         filter1_logger.info(f"Timestamp: {datetime.now()}, EXECUTION TIME ms: {elapsed_time_ms}")
@@ -127,10 +126,10 @@ class Filter2Frame(VideoFrame.VideoFrame):
         Filter: Gaussian Blur - CPU
         """
         start_time = time.time()
-        filtered_frame = cv2.GaussianBlur(frame, (21, 21), 0)
+        filtered_frame = GaussianFilter.GaussianBlurImage(frame, 2.0)
         stop_time = time.time()
         mse, psnr = measure_distortion(frame, filtered_frame)
-        elapsed_time_ms = (stop_time - start_time)
+        elapsed_time_ms = (stop_time - start_time) * 1000
         filter2_logger.info(f"Timestamp: {datetime.now()}, EXECUTION TIME ms: {elapsed_time_ms}")
         return filtered_frame
 
@@ -147,7 +146,7 @@ class Filter3Frame(VideoFrame.VideoFrame):
         start_time = time.time()
         filtered_frame = BicubicInterpolation.bicubic(frame, scale, a)
         stop_time = time.time()
-        elapsed_time_ms = (stop_time - start_time)
+        elapsed_time_ms = (stop_time - start_time) * 1000
         # Convert frame to 8-bit unsigned integer format
         frame_8u = cv2.convertScaleAbs(filtered_frame)
         mse, psnr = measure_distortion(frame, filtered_frame)
@@ -167,10 +166,10 @@ class Filter4Frame(VideoFrame.VideoFrame):
         '''
         sigma_s = 10.0
         sigma_r = 0.5
-        start_time = time.time_ns()
+        start_time = time.time()
         filtered_frame = cv2.bilateralFilter(frame, 9, sigma_s, sigma_r)
-        stop_time = time.time_ns()
-        elapsed_time_ms = (stop_time - start_time) * 1e6
+        stop_time = time.time()
+        elapsed_time_ms = (stop_time - start_time) * 1000
 
         # Measure distortion
         mse, psnr = measure_distortion(frame, filtered_frame)
