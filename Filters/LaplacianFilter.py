@@ -21,19 +21,7 @@ def laplacianFilter(frame, result, width, height):
     kernel[1, 2] = 1
     kernel[2, 0] = 0
     kernel[2, 1] = 1
-    kernel[2, 2] = 0
-    
-    # Define the kernel values: Negative laplacian mask
-    # kernel[0, 0] = 0
-    # kernel[0, 1] = -1
-    # kernel[0, 2] = 0
-    # kernel[1, 0] = -1
-    # kernel[1, 1] = 4
-    # kernel[1, 2] = -1
-    # kernel[2, 0] = 0
-    # kernel[2, 1] = -1
-    # kernel[2, 2] = 0
-    
+    kernel[2, 2] = 0    
     
     # Check if inside the limit of the frame:
     if((x >= FILTER_WIDTH // 2) and (x < (width - FILTER_WIDTH // 2)) and (y >= FILTER_HEIGHT // 2) and (y < (height - FILTER_HEIGHT // 2))):
