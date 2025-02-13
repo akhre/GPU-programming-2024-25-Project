@@ -9,6 +9,7 @@ import math
 import logging
 import time
 import cpu.BicubicInterpolation as BicubicInterpolation
+import cpu.BilateralFiltering as BilateralFiltering
 import cpu.GaussianFilter as GaussianFilter
 import os # Used to get the video name
 from datetime import datetime # Used in the logs to timestamp the execution
@@ -167,7 +168,9 @@ class Filter4Frame(VideoFrame.VideoFrame):
         sigma_s = 10.0
         sigma_r = 0.5
         start_time = time.time()
-        filtered_frame = cv2.bilateralFilter(frame, 9, sigma_s, sigma_r)
+        filtered_frame = BilateralFiltering.bilateral_filter(frame, sigma_s, sigma_r)
+        # Convert the filtered frame to uint8
+        filtered_frame = cv2.convertScaleAbs(filtered_frame)
         stop_time = time.time()
         elapsed_time_ms = (stop_time - start_time) * 1000
 
@@ -257,9 +260,9 @@ filter_2_frame = Filter2Frame(right_top_right_frame)
 filter_3_frame = Filter3Frame(right_bottom_left_frame)
 filter_4_frame = Filter4Frame(right_bottom_right_frame)
 
-camera_frame.screens.append(filter_1_frame)
-camera_frame.screens.append(filter_2_frame)
-camera_frame.screens.append(filter_3_frame)
+# camera_frame.screens.append(filter_1_frame)
+# camera_frame.screens.append(filter_2_frame)
+# camera_frame.screens.append(filter_3_frame)
 camera_frame.screens.append(filter_4_frame)
 # camera_frame.update()
 
