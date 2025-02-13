@@ -5,9 +5,9 @@ import cv2
 import numpy as np
 from numba import cuda
 import VideoFrameOptimized as VideoFrame
-from Filters.BicubicInterpolation import bicubic_interpolation
-from Filters.BilateralFiltering_optimized import bilateral_filter
-from Filters.GaussianBlur import gaussian_filter
+from Filters.BicubicInterpolation_optimized import bicubic_interpolation
+from Filters.BilateralFiltering_tile import bilateral_filter
+from Filters.GaussianBlur import compute_gaussian_kernel, convolution
 from Filters.LaplacianFilter import laplacianFilter
 import math
 import logging
@@ -75,11 +75,6 @@ class OriginalFrame(VideoFrame.VideoFrame):
             y = (self.canvas.winfo_height() - self.photo.height()) / 2
             self.canvas.create_image(x, y, image=self.photo, anchor=NW)
             self.apply_filters(frame)
-            
-            
-            
-            # for screen in self.screens:
-            #     screen.update(frame)
         else:
             self.reset_frame()  # Reset the frame when the video ends
             self.vid.release()
@@ -117,9 +112,6 @@ class OriginalFrame(VideoFrame.VideoFrame):
         if self.d_output_filter_4 is None:
             self.d_output_filter_4 = cuda.device_array((frame.shape[0], frame.shape[1], 3), dtype=np.float32, stream=stream_copy)
             
-        # d_output = cuda.device_array_like(frame, stream_copy)
-        # d_output_filter_3 = 
-        # d_output_filter_4 = cuda.device_array((frame.shape[0], frame.shape[1], 3), dtype=np.float32, stream=stream_copy)
         stream_copy.synchronize()
         
         # Apply the filters:
@@ -141,18 +133,6 @@ class OriginalFrame(VideoFrame.VideoFrame):
         
         stream_filter_4.synchronize()
         filter_4_frame.update(filtered_frame4)
-        
-        
-        # NO NO Asynchronously copy the results back to the host
-        # NO LOL filtered_frame2 = d_output_filter_2.copy_to_host(stream=stream_filter_2)
-        
-        
-        
-        
-        # filter_2_frame.apply_filter(frame, d_frame, stream_filter_2)
-        
-        # return filtered_frame2
-        
         
 
     def __del__(self):
@@ -221,26 +201,48 @@ class Filter2Frame(VideoFrame.VideoFrame):
         """
         Filter: Gaussian Blur
         """
+        
+        # Determine the filter size
+        sigma = 2.0
+        filter_size = 2 * int(4 * sigma + 0.5) + 1
+        kernel = np.zeros((filter_size, filter_size), dtype=np.float32)
+        
         # Allocate memory on the GPU
-        # d_output = cuda.device_array_like(frame)
-
+        d_kernel = cuda.to_device(kernel)
+        
         # Define the grid and block dimensions
         threads_per_block = (16, 16)
-
-        blocks_per_grid_x = int(np.ceil((frame.shape[0] + threads_per_block[0] - 1) / threads_per_block[0]))
-        blocks_per_grid_y = int(np.ceil((frame.shape[1] + threads_per_block[1] - 1) / threads_per_block[1]))
+        blocks_per_grid_x = (filter_size + threads_per_block[0] - 1) // threads_per_block[0]
+        blocks_per_grid_y = (filter_size + threads_per_block[1] - 1) // threads_per_block[1]
         blocks_per_grid = (blocks_per_grid_x, blocks_per_grid_y)
+        
         # Create CUDA events for timing
         start_event = cuda.event()
         end_event = cuda.event()
 
         # Record the start event
         start_event.record()
-
-        # Launch the kernel
-        gaussian_filter[blocks_per_grid, threads_per_block, stream](d_frame, d_output)
-        # cuda.synchronize()  # wait for all threads to complete. The copy to the host performs an implicit synchronization, so the call to cuda.syncronize is not really necessary.
         
+        # Compute Gaussian kernel on the device
+        compute_gaussian_kernel[blocks_per_grid, threads_per_block, stream](d_kernel, sigma)
+        
+        # Normalize the kernel (copy back to host, sum, normalize, send back)
+        kernel = d_kernel.copy_to_host()
+        kernel_sum = kernel.sum()
+        kernel /= kernel_sum
+        d_kernel = cuda.to_device(kernel)
+        
+
+        
+        # Configure convolution kernel launch parameters
+        # threads_per_block = (16, 16)
+        grid_x = int(np.ceil((frame.shape[0] + threads_per_block[0] - 1) / threads_per_block[0]))
+        grid_y = int(np.ceil((frame.shape[1] + threads_per_block[1] - 1) / threads_per_block[1]))
+        blocks_per_grid = (grid_x, grid_y)
+        # Perform convolution
+        convolution[blocks_per_grid, threads_per_block](frame, d_kernel, d_output)
+        
+
         # Record the end event
         end_event.record()
 
@@ -258,16 +260,17 @@ class Filter2Frame(VideoFrame.VideoFrame):
 class Filter3Frame(VideoFrame.VideoFrame):
 
     def apply_filter(self, frame, d_frame, d_output, stream):
+        """
+        Filter: Bicubic interpolation
+        """
         # Scale factor for the bicubic interpolation
         scale = 2.0
-        # scale = 0.5
 
-        # Allocate memory on the GPU
         # Calculate the dimensions of the scaled frame
         scaled_height = int(frame.shape[0] * scale)
         scaled_width = int(frame.shape[1] * scale)
-        # d_output = cuda.device_array_like(frame)
-        # Allocate memory for the scaled frame
+
+        # Allocate memory for the scaled frame on the GPU
         d_output = cuda.device_array((scaled_height, scaled_width, frame.shape[2]), dtype=frame.dtype)
 
         # Define the grid and block dimensions
@@ -311,13 +314,17 @@ class Filter3Frame(VideoFrame.VideoFrame):
 class Filter4Frame(VideoFrame.VideoFrame):
 
     def apply_filter(self, frame, d_frame, d_output, stream):
-        # Bilateral filtering
-        # d_output = cuda.device_array((frame.shape[0], frame.shape[1], 3), dtype=np.float32)
-
+        """
+        Filter: Bilateral Filter
+        """
+        frame = frame.astype(np.float32)
+        d_frame = cuda.to_device(frame)
+        
         # Define the block and grid dimensions
-        threads_per_block = (16, 16)
-        blocks_per_grid_x = math.ceil(frame.shape[0] / threads_per_block[0])
-        blocks_per_grid_y = math.ceil(frame.shape[1] / threads_per_block[1])
+        TILE_SIZE = 16
+        threads_per_block = (TILE_SIZE, TILE_SIZE)
+        blocks_per_grid_x = math.ceil((frame.shape[0] + TILE_SIZE - 1)/ threads_per_block[0])
+        blocks_per_grid_y = math.ceil((frame.shape[1] + TILE_SIZE - 1) / threads_per_block[1])
         blocks_per_grid = (blocks_per_grid_x, blocks_per_grid_y)
 
         # Define sigma values
@@ -332,7 +339,7 @@ class Filter4Frame(VideoFrame.VideoFrame):
         start_event.record()
         
         # Launch the kernel
-        bilateral_filter[blocks_per_grid, threads_per_block, stream](frame, d_output, sigma_s, sigma_r)
+        bilateral_filter[blocks_per_grid, threads_per_block, stream](d_frame, d_output, sigma_s, sigma_r)
                 
         cuda.synchronize()  # wait for all threads to complete. The copy to the host performs an implicit synchronization, so the call to cuda.syncronize is not really necessary.
         
@@ -349,7 +356,7 @@ class Filter4Frame(VideoFrame.VideoFrame):
         result = d_output.copy_to_host()
         
         # Convert the result to uint8
-        filtered_frame = result.astype(np.uint8)   # Clip may be not necessary
+        filtered_frame = np.clip(result, 0, 255).astype(np.uint8)   # Clip may be not necessary
 
         # Log the results
         filter4_logger.info(f"Timestamp: {datetime.now()}, EXECUTION TIME ms: {elapsed_time_ms}")
